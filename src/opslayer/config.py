@@ -33,6 +33,7 @@ _ATTR_BY_ENV = {
     "OPSLAYER_PIHOLE_HOST": "pihole_host",
     "OPSLAYER_TRUENAS_HOST": "truenas_host",
     "OPSLAYER_DNS_ZONE": "dns_zone",
+    "OPSLAYER_DNS_PROVIDER": "dns_provider",
 }
 
 WRITABLE_KEYS = frozenset(_ATTR_BY_ENV.values()) | {"backup_root"}
@@ -47,6 +48,7 @@ class Config:
     pihole_host: str = ""
     truenas_host: str = ""
     dns_zone: str = ""
+    dns_provider: str = "route53"
     backup_root: Path = field(default_factory=lambda: Path("/srv/backups"))
     json_output: bool = False
 
