@@ -119,3 +119,18 @@ def test_facade_dispatch(client, monkeypatch):
 
 def test_zone_discovery_by_name(client):
     assert Route53Provider(CFG).list_records()["zone_id"] == "ZEXAMPLE123"
+
+
+def test_infer_record_type():
+    from opslayer.operations.dns.route53 import infer_record_type
+
+    assert infer_record_type("10.0.0.5") == "A"
+    assert infer_record_type("fd00::1") == "AAAA"
+    assert infer_record_type("nas.dtac.io") == "CNAME"
+
+
+def test_upsert_infers_type_from_value(client):
+    result = Route53Provider(CFG).upsert("ops01", "10.0.0.5")
+    assert result["record_type"] == "A"
+    result = Route53Provider(CFG).upsert("nas-alias", "nas.dtac.io")
+    assert result["record_type"] == "CNAME"

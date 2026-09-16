@@ -23,7 +23,7 @@ def dns_lookup(name: str, *, cfg: Config | None = None) -> dict:
     return get_provider(cfg=cfg).resolve(name)
 
 
-def dns_upsert(name: str, address: str, record_type: str = "A", ttl: int = 300, *, cfg: Config | None = None) -> dict:
+def dns_upsert(name: str, address: str, record_type: str | None = None, ttl: int = 300, *, cfg: Config | None = None) -> dict:
     return get_provider(cfg=cfg).upsert(name, address, record_type, ttl)
 
 

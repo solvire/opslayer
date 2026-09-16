@@ -75,7 +75,12 @@ def network_dns_zones() -> None:
 
 
 @network_app.command("dns-upsert")
-def network_dns_upsert(name: str, address: str, record_type: str = "A", ttl: int = 300) -> None:
+def network_dns_upsert(
+    name: str,
+    address: str,
+    record_type: str = typer.Option(None, help="A/AAAA/CNAME; inferred from value when omitted"),
+    ttl: int = 300,
+) -> None:
     _output(operations.networking.dns_upsert(name, address, record_type, ttl))
 
 

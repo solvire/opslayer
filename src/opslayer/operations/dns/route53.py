@@ -12,11 +12,27 @@ Least-privilege policy for the key (Route53 only, one zone):
 
 from __future__ import annotations
 
+import ipaddress
+
 import boto3
 
-from ...config import Config
-from ...events import record
+from opslayer.config import Config
+from opslayer.events import record
 from . import register
+
+
+def infer_record_type(value: str) -> str:
+    """A for IPv4, AAAA for IPv6, CNAME for anything else."""
+    try:
+        ipaddress.IPv4Address(value)
+        return "A"
+    except ValueError:
+        pass
+    try:
+        ipaddress.IPv6Address(value)
+        return "AAAA"
+    except ValueError:
+        return "CNAME"
 
 
 def _paginate(client, method: str, key: str, **kwargs) -> list[dict]:
@@ -76,9 +92,10 @@ class Route53Provider:
         raw = _paginate(self.client, "list_resource_record_sets", "ResourceRecordSets", HostedZoneId=zone_id)
         return {"zone_id": zone_id, "records": [self._summary(r) for r in raw]}
 
-    def upsert(self, name: str, address: str, record_type: str = "A", ttl: int = 300) -> dict:
+    def upsert(self, name: str, address: str, record_type: str | None = None, ttl: int = 300) -> dict:
         zone_id = self._zone_id(None)
         fqdn = name if name.endswith(f".{self.cfg.dns_zone}") else f"{name}.{self.cfg.dns_zone}"
+        resolved_type = record_type or infer_record_type(address)
         response = self.client.change_resource_record_sets(
             HostedZoneId=zone_id,
             ChangeBatch={
@@ -88,7 +105,7 @@ class Route53Provider:
                         "Action": "UPSERT",
                         "ResourceRecordSet": {
                             "Name": fqdn,
-                            "Type": record_type,
+                            "Type": resolved_type,
                             "TTL": ttl,
                             "ResourceRecords": [{"Value": address}],
                         },
@@ -96,11 +113,15 @@ class Route53Provider:
                 ],
             },
         )
-        entry = record("networking.dns_upsert", fqdn, "ok", {"address": address, "type": record_type})
+        entry = record(
+            "networking.dns_upsert", fqdn, "ok",
+            {"address": address, "type": resolved_type},
+        )
         return {
             "result": "ok",
             "fqdn": fqdn,
             "address": address,
+            "record_type": resolved_type,
             "change_id": response["ChangeInfo"]["Id"],
             "status": response["ChangeInfo"]["Status"],
             "event": entry,
