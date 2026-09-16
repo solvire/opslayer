@@ -66,7 +66,17 @@ def deploy_status(app_name: str) -> None:
 
 @network_app.command("dns-list")
 def network_dns_list(zone: str = "") -> None:
-    _output(operations.networking.dns_records(zone))
+    _output(operations.networking.dns_list(zone or None))
+
+
+@network_app.command("dns-zones")
+def network_dns_zones() -> None:
+    _output(operations.networking.list_zones())
+
+
+@network_app.command("dns-upsert")
+def network_dns_upsert(name: str, address: str, record_type: str = "A", ttl: int = 300) -> None:
+    _output(operations.networking.dns_upsert(name, address, record_type, ttl))
 
 
 @network_app.command("ingress")
