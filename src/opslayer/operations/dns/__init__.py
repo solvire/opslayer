@@ -37,7 +37,7 @@ def register(name: str):
 
 
 def get_provider(name: str | None = None, cfg=None) -> DNSProvider:
-    from ..config import get_config
+    from ...config import get_config
 
     selected = name
     if not selected:

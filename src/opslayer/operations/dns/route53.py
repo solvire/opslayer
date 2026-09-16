@@ -1,110 +1,136 @@
-"""AWS Route53 provider."""
+"""AWS Route53 provider. Talks boto3 directly - no AWS CLI subprocess.
+
+Credentials: boto3's standard chain applies. The supported path for opslayer
+is the repo-root .env carrying the standard AWS_* variables (gitignored, see
+.env.example); explicit session/CLI profiles also work untouched.
+
+Least-privilege policy for the key (Route53 only, one zone):
+  route53:ListHostedZones, route53:GetChange          -> Resource: *
+  route53:ListResourceRecordSets,
+  route53:ChangeResourceRecordSets                    -> Resource: the zone ARN
+"""
 
 from __future__ import annotations
 
-import json
+import boto3
 
 from ...config import Config
 from ...events import record
-from ... import runners
 from . import register
 
 
-def _run(args: list[str], timeout: int = 60) -> str:
-    return runners.run(["aws", *args], timeout=timeout)
+def _paginate(client, method: str, key: str, **kwargs) -> list[dict]:
+    paginator = client.get_paginator(method)
+    items: list[dict] = []
+    for page in paginator.paginate(**kwargs):
+        items.extend(page.get(key, []))
+    return items
 
 
 @register("route53")
 class Route53Provider:
-    def __init__(self, cfg: Config | None = None):
+    def __init__(self, cfg: Config | None = None, client=None):
         self.cfg = cfg or Config.load()
+        self._client = client
+
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = boto3.client("route53")
+        return self._client
 
     def list_zones(self) -> dict:
-        out = _run(["route53", "list-hosted-zones", "--output", "json"], timeout=30)
-        zones = [
-            {
-                "id": z["Id"].split("/")[-1],
-                "name": z["Name"].rstrip("."),
-                "records": z["ResourceRecordSetCount"],
-            }
-            for z in json.loads(out)["HostedZones"]
-        ]
-        return {"zones": zones}
+        zones = _paginate(self.client, "list_hosted_zones", "HostedZones")
+        return {
+            "zones": [
+                {
+                    "id": z["Id"].split("/")[-1],
+                    "name": z["Name"].rstrip("."),
+                    "records": z["ResourceRecordSetCount"],
+                }
+                for z in zones
+            ]
+        }
 
     def _zone_id(self, zone: str | None) -> str:
         if zone:
             return zone
         name = self.cfg.dns_zone
-        zones = self.list_zones()["zones"]
-        matches = [z for z in zones if z["name"] == name]
+        matches = [z for z in self.list_zones()["zones"] if z["name"] == name]
         if not matches:
             raise LookupError(f"no hosted zone found for {name}")
         return matches[0]["id"]
 
+    @staticmethod
+    def _summary(r: dict) -> dict:
+        return {
+            "name": r["Name"].rstrip("."),
+            "type": r["Type"],
+            "ttl": r.get("TTL"),
+            "values": r.get("ResourceRecords", []),
+            "alias": "AliasTarget" in r,
+        }
+
     def list_records(self, zone: str | None = None) -> dict:
         zone_id = self._zone_id(zone)
-        records: list[dict] = []
-        args = ["route53", "list-resource-record-sets", "--hosted-zone-id", zone_id, "--output", "json"]
-        payload = json.loads(_run(args))
-        records.extend(payload.get("ResourceRecordSets", []))
-        while payload.get("IsTruncated"):
-            payload = json.loads(
-                _run(
-                    args
-                    + [
-                        "--start-record-name",
-                        payload["NextRecordName"],
-                        "--start-record-type",
-                        payload["NextRecordType"],
-                    ]
-                )
-            )
-            records.extend(payload.get("ResourceRecordSets", []))
-        summaries = []
-        for r in records:
-            summaries.append(
-                {
-                    "name": r["Name"].rstrip("."),
-                    "type": r["Type"],
-                    "ttl": r.get("TTL"),
-                    "values": r.get("ResourceRecords", []),
-                    "alias": "AliasTarget" in r,
-                }
-            )
-        return {"zone_id": zone_id, "records": summaries}
+        raw = _paginate(self.client, "list_resource_record_sets", "ResourceRecordSets", HostedZoneId=zone_id)
+        return {"zone_id": zone_id, "records": [self._summary(r) for r in raw]}
 
     def upsert(self, name: str, address: str, record_type: str = "A", ttl: int = 300) -> dict:
         zone_id = self._zone_id(None)
         fqdn = name if name.endswith(f".{self.cfg.dns_zone}") else f"{name}.{self.cfg.dns_zone}"
-        change = {
-            "Comment": f"opslayer upsert {fqdn}",
-            "Changes": [
-                {
-                    "Action": "UPSERT",
-                    "ResourceRecordSet": {
-                        "Name": fqdn,
-                        "Type": record_type,
-                        "TTL": ttl,
-                        "ResourceRecords": [{"Value": address}],
-                    },
-                }
-            ],
-        }
-        out = _run(
-            [
-                "route53",
-                "change-resource-record-sets",
-                "--hosted-zone-id",
-                zone_id,
-                "--change-batch",
-                json.dumps(change),
-                "--output",
-                "json",
-            ]
+        response = self.client.change_resource_record_sets(
+            HostedZoneId=zone_id,
+            ChangeBatch={
+                "Comment": f"opslayer upsert {fqdn}",
+                "Changes": [
+                    {
+                        "Action": "UPSERT",
+                        "ResourceRecordSet": {
+                            "Name": fqdn,
+                            "Type": record_type,
+                            "TTL": ttl,
+                            "ResourceRecords": [{"Value": address}],
+                        },
+                    }
+                ],
+            },
         )
         entry = record("networking.dns_upsert", fqdn, "ok", {"address": address, "type": record_type})
-        return {"result": "ok", "fqdn": fqdn, "address": address, "output": out, "event": entry}
+        return {
+            "result": "ok",
+            "fqdn": fqdn,
+            "address": address,
+            "change_id": response["ChangeInfo"]["Id"],
+            "status": response["ChangeInfo"]["Status"],
+            "event": entry,
+        }
+
+    def delete(self, name: str, record_type: str = "A", *, all_values: bool = False) -> dict:
+        """Delete a record. Non-alias records must match their stored values exactly,
+        so this reads the record first and replays it with Action=DELETE."""
+        zone_id = self._zone_id(None)
+        fqdn = name if name.endswith(f".{self.cfg.dns_zone}") else f"{name}.{self.cfg.dns_zone}"
+        existing = [
+            r
+            for r in self.client.list_resource_record_sets(HostedZoneId=zone_id).get("ResourceRecordSets", [])
+            if r["Name"].rstrip(".") == fqdn and r["Type"] == record_type and "AliasTarget" not in r
+        ]
+        if not existing:
+            raise LookupError(f"no deletable {record_type} record named {fqdn}")
+        target = existing[0] if all_values or len(existing) == 1 else existing[0]
+        response = self.client.change_resource_record_sets(
+            HostedZoneId=zone_id,
+            ChangeBatch={
+                "Comment": f"opslayer delete {fqdn}",
+                "Changes": [{"Action": "DELETE", "ResourceRecordSet": target}],
+            },
+        )
+        entry = record("networking.dns_delete", fqdn, "ok", {"type": record_type})
+        return {"result": "ok", "fqdn": fqdn, "change_id": response["ChangeInfo"]["Id"], "event": entry}
 
     def resolve(self, name: str) -> dict:
+        from ... import runners
+
         out = runners.run(["dig", "+short", name], timeout=15)
         return {"name": name, "resolved": out.split()}

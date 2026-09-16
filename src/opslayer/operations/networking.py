@@ -27,6 +27,10 @@ def dns_upsert(name: str, address: str, record_type: str = "A", ttl: int = 300, 
     return get_provider(cfg=cfg).upsert(name, address, record_type, ttl)
 
 
+def dns_delete(name: str, record_type: str = "A", *, cfg: Config | None = None) -> dict:
+    return get_provider(cfg=cfg).delete(name, record_type)
+
+
 def ingress_list(namespace: str = "default", *, cfg: Config | None = None) -> dict:
     out = runners.kubectl(["get", "ingress", "-n", namespace, "-o", "wide"])
     return {"namespace": namespace, "ingress": out}

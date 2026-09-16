@@ -79,6 +79,16 @@ def network_dns_upsert(name: str, address: str, record_type: str = "A", ttl: int
     _output(operations.networking.dns_upsert(name, address, record_type, ttl))
 
 
+@network_app.command("dns-delete")
+def network_dns_delete(name: str, record_type: str = "A") -> None:
+    _output(operations.networking.dns_delete(name, record_type))
+
+
+@network_app.command("dns-lookup")
+def network_dns_lookup(name: str) -> None:
+    _output(operations.networking.dns_lookup(name))
+
+
 @network_app.command("ingress")
 def network_ingress(namespace: str = "default") -> None:
     _output(operations.networking.ingress_list(namespace))

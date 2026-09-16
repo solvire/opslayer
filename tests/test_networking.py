@@ -1,107 +1,121 @@
-import json
-from pathlib import Path
-
 import pytest
 
 from opslayer.config import Config
 from opslayer.operations import networking
-from opslayer.operations.dns import get_provider
+from opslayer.operations.dns import available_providers, get_provider
+from opslayer.operations.dns.route53 import Route53Provider
 
 CFG = Config(dns_zone="example.com")
 
-FIXTURE_ZONES = {
-    "HostedZones": [
-        {"Id": "/hostedzone/ZEXAMPLE123", "Name": "example.com.", "ResourceRecordSetCount": 12}
-    ]
-}
 
-FIXTURE_RECORDS = {
-    "ResourceRecordSets": [
-        {
-            "Name": "ops01.example.com.",
-            "Type": "A",
-            "TTL": 300,
-            "ResourceRecords": [{"Value": "10.0.0.5"}],
-        },
-        {
-            "Name": "example.com.",
-            "Type": "NS",
-            "TTL": 172800,
-            "ResourceRecords": [{"Value": "ns-1.awsdns-01.com"}],
-        },
-        {
-            "Name": "app.example.com.",
-            "Type": "A",
-            "AliasTarget": {"DNSName": "dualstack.elb.amazonaws.com"},
-        },
-    ],
-    "IsTruncated": False,
-}
+class StubRoute53Client:
+    """Mirrors boto3 route53 shapes opslayer consumes."""
 
+    def __init__(self):
+        self.calls = []
 
-class StubProvider:
-    """Records runner calls; reuses Route53's command building via the same runner seam."""
+    def get_paginator(self, method):
+        if method == "list_hosted_zones":
+            return _Paginator([{"HostedZones": [
+                {"Id": "/hostedzone/ZEXAMPLE123", "Name": "example.com.", "ResourceRecordSetCount": 12},
+            ]}])
+        if method == "list_resource_record_sets":
+            return _Paginator([{"ResourceRecordSets": [
+                {"Name": "ops01.example.com.", "Type": "A", "TTL": 300,
+                 "ResourceRecords": [{"Value": "10.0.0.5"}]},
+                {"Name": "app.example.com.", "Type": "A",
+                 "AliasTarget": {"DNSName": "dualstack.elb.amazonaws.com"}},
+                {"Name": "example.com.", "Type": "NS", "TTL": 172800,
+                 "ResourceRecords": [{"Value": "ns-1.awsdns-01.com"}]},
+            ]}])
+        raise AssertionError(f"unexpected paginator: {method}")
 
-    def __init__(self, calls):
-        self.calls = calls
+    def change_resource_record_sets(self, **kwargs):
+        self.calls.append(("change", kwargs))
+        return {"ChangeInfo": {"Id": "/change/C1", "Status": "PENDING"}}
 
-    def list_zones(self):
-        self.calls.append(["aws", "route53", "list-hosted-zones"])
-        return {"zones": [{"id": "ZEXAMPLE123", "name": "example.com", "records": 12}]}
-
-    def list_records(self, zone):
-        self.calls.append(["aws", "route53", "list-resource-record-sets", zone])
-        return {"zone_id": "ZEXAMPLE123", "records": networking_summary()}
-
-    def upsert(self, name, address, record_type="A", ttl=300):
-        self.calls.append(["aws", "route53", "change-resource-record-sets", name, address])
-        return {"result": "ok", "fqdn": name, "address": address}
-
-    def resolve(self, name):
-        return {"name": name, "resolved": []}
+    def list_resource_record_sets(self, **kwargs):
+        self.calls.append(("list", kwargs))
+        return {"ResourceRecordSets": [
+            {"Name": "test.example.com.", "Type": "A", "TTL": 300,
+             "ResourceRecords": [{"Value": "10.0.0.99"}]},
+        ]}
 
 
-def networking_summary():
-    return [
-        {"name": "ops01.example.com", "type": "A", "ttl": 300, "values": [{"Value": "10.0.0.5"}], "alias": False},
-        {"name": "app.example.com", "type": "A", "ttl": None, "values": [], "alias": True},
-        {"name": "example.com", "type": "NS", "ttl": 172800, "values": [{"Value": "ns-1.awsdns-01.com"}], "alias": False},
-    ]
+class _Paginator:
+    def __init__(self, pages):
+        self.pages = pages
+
+    def paginate(self, **kwargs):
+        return iter(self.pages)
 
 
 @pytest.fixture()
-def fake_aws(monkeypatch):
-    calls = []
-    stub = StubProvider(calls)
-    monkeypatch.setattr(networking, "get_provider", lambda cfg=None: stub)
-    return calls
+def client(monkeypatch):
+    stub = StubRoute53Client()
+    monkeypatch.setattr(Route53Provider, "client", property(lambda self: stub))
+    return stub
 
 
-def test_list_zones(fake_aws):
-    result = networking.list_zones()
+def test_registry_has_route53():
+    assert "route53" in available_providers()
+
+
+def test_provider_dispatch(cfg=None):
+    assert isinstance(get_provider("route53", CFG), Route53Provider)
+
+
+def test_list_zones(client):
+    result = Route53Provider(CFG).list_zones()
     assert result["zones"] == [{"id": "ZEXAMPLE123", "name": "example.com", "records": 12}]
 
 
-def test_dns_list_parses_records(fake_aws):
-    result = networking.dns_list("ZEXAMPLE123")
+def test_list_records(client):
+    result = Route53Provider(CFG).list_records()
     names = {r["name"]: r for r in result["records"]}
     assert names["ops01.example.com"]["values"] == [{"Value": "10.0.0.5"}]
     assert names["app.example.com"]["alias"] is True
     assert names["example.com"]["type"] == "NS"
-    assert json.dumps(result)  # json-able contract
-
-
-def test_dns_upsert_dispatches_to_provider(fake_aws):
-    result = networking.dns_upsert("ops01", "10.0.0.6", ttl=300, cfg=CFG)
-    assert result["result"] == "ok"
-    assert ["aws", "route53", "change-resource-record-sets", "ops01", "10.0.0.6"] in fake_aws
-
-
-def test_zone_discovery_by_name(fake_aws):
-    result = networking.dns_list(None, cfg=CFG)
     assert result["zone_id"] == "ZEXAMPLE123"
 
 
-def test_registry_dispatches_by_name():
-    from opslayer.operations.dns import available_providers
-    assert "route53" in available_providers()
+def test_upsert(client):
+    result = Route53Provider(CFG).upsert("ops01", "10.0.0.6", ttl=300)
+    assert result["result"] == "ok"
+    assert result["fqdn"] == "ops01.example.com"
+    assert result["status"] == "PENDING"
+    method, kwargs = client.calls[0]
+    assert method == "change"
+    rrset = kwargs["ChangeBatch"]["Changes"][0]["ResourceRecordSet"]
+    assert rrset["Name"] == "ops01.example.com"
+    assert rrset["ResourceRecords"] == [{"Value": "10.0.0.6"}]
+
+
+def test_upsert_fqdn_passthrough(client):
+    result = Route53Provider(CFG).upsert("ops01.example.com", "10.0.0.6")
+    assert result["fqdn"] == "ops01.example.com"
+
+
+def test_delete(client):
+    result = Route53Provider(CFG).delete("test", "A")
+    assert result["result"] == "ok"
+    method, kwargs = next(c for c in client.calls if c[0] == "change")
+    change = kwargs["ChangeBatch"]["Changes"][0]
+    assert change["Action"] == "DELETE"
+    assert change["ResourceRecordSet"]["Name"] == "test.example.com."
+
+
+def test_delete_missing_raises(client):
+    with pytest.raises(LookupError):
+        Route53Provider(CFG).delete("nonexistent", "A")
+
+
+def test_facade_dispatch(client, monkeypatch):
+    monkeypatch.setattr(networking, "get_provider", lambda cfg=None: Route53Provider(CFG, client))
+    result = networking.dns_upsert("ops01", "10.0.0.7", cfg=CFG)
+    assert result["result"] == "ok"
+    assert networking.dns_list()["zone_id"] == "ZEXAMPLE123"
+
+
+def test_zone_discovery_by_name(client):
+    assert Route53Provider(CFG).list_records()["zone_id"] == "ZEXAMPLE123"
