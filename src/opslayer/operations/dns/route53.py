@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from ..config import Config
-from ..events import record
+from ...config import Config
+from ...events import record
 from ... import runners
 from . import register
 
