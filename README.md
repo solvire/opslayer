@@ -20,11 +20,14 @@ Design rules:
 |---|---|
 | `deploy` | app deploys, ArgoCD sync/rollback, manifest bumps |
 | `networking` | DNS records, ingress/routing, port policy |
+| `tunnel` | public exposure via dial-out tunnel (frp; provider seam for Cloudflare later) |
 | `monitoring` | status, uptime, alerting |
 | `nut` | UPS/power (server on pihole Zero, slaves elsewhere) |
 | `cluster` | node lifecycle: drain, cordon, reboot, k3s join |
 | `maintenance` | backup, restore, drills, upgrades, housekeeping |
 | `secrets` | sops encrypt/rotate, credential status |
+
+Roadmap (next target: the dtac.io / fartemis migration) lives in `docs/roadmap.md`.
 
 ## Install
 
@@ -44,4 +47,7 @@ pip install -e ".[dev,mcp]"
 ## Status
 
 v0.1 scaffold. Real operation implementations land as the M720q k3s node comes up.
+As of 2026-09-22: node00 k3s up; scotttactical.com live over the frp tunnel
+(operations/tunnel/ + networking verbs in GitHub d41185e). Next: dtac.io (fartemis)
+per docs/roadmap.md.
 # opslayer
