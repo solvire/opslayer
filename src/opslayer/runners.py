@@ -10,12 +10,13 @@ class OpError(RuntimeError):
     pass
 
 
-def run(cmd: list[str], *, timeout: int = 60, check: bool = True) -> str:
+def run(cmd: list[str], *, timeout: int = 60, check: bool = True, input: str | None = None) -> str:
     binary = shutil.which(cmd[0])
     if binary is None:
         raise OpError(f"required tool not found: {cmd[0]}")
     proc = subprocess.run(
         [binary, *cmd[1:]],
+        input=input,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -26,8 +27,8 @@ def run(cmd: list[str], *, timeout: int = 60, check: bool = True) -> str:
     return proc.stdout.strip()
 
 
-def kubectl(args: list[str], *, timeout: int = 60) -> str:
-    return run(["kubectl", *args], timeout=timeout)
+def kubectl(args: list[str], *, timeout: int = 60, input: str | None = None) -> str:
+    return run(["kubectl", *args], timeout=timeout, input=input)
 
 
 def argocd(args: list[str], *, timeout: int = 120) -> str:

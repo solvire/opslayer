@@ -6,6 +6,7 @@ dist/
 
 # personal configuration - never commit (this repo is public)
 .env
+.env*
 .env.*
 config.toml
 *.local.toml

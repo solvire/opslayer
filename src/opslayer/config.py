@@ -34,6 +34,10 @@ _ATTR_BY_ENV = {
     "OPSLAYER_TRUENAS_HOST": "truenas_host",
     "OPSLAYER_DNS_ZONE": "dns_zone",
     "OPSLAYER_DNS_PROVIDER": "dns_provider",
+    "OPSLAYER_TUNNEL_PROVIDER": "tunnel_provider",
+    "OPSLAYER_FRP_SERVER": "frp_server",
+    "OPSLAYER_FRP_TOKEN": "frp_token",
+    "OPSLAYER_FRP_PORT": "frp_port",
 }
 
 WRITABLE_KEYS = frozenset(_ATTR_BY_ENV.values()) | {"backup_root"}
@@ -49,6 +53,10 @@ class Config:
     truenas_host: str = ""
     dns_zone: str = ""
     dns_provider: str = "route53"
+    tunnel_provider: str = "frp"
+    frp_server: str = ""
+    frp_token: str = ""
+    frp_port: int = 7000
     backup_root: Path = field(default_factory=lambda: Path("/srv/backups"))
     json_output: bool = False
 
@@ -61,6 +69,11 @@ class Config:
                 values[attr] = os.environ[env_key]
         if os.environ.get("OPSLAYER_BACKUP_ROOT"):
             values["backup_root"] = Path(os.environ["OPSLAYER_BACKUP_ROOT"])
+        if "frp_port" in values:
+            try:
+                values["frp_port"] = int(values["frp_port"])
+            except ValueError:
+                raise ValueError("OPSLAYER_FRP_PORT must be an integer")
         return cls(**{**cls().__dict__, **values})
 
 

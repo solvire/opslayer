@@ -99,6 +99,40 @@ def network_ingress(namespace: str = "default") -> None:
     _output(operations.networking.ingress_list(namespace))
 
 
+@network_app.command("tunnel-list")
+def network_tunnel_list() -> None:
+    _output(operations.networking.tunnel_list())
+
+
+@network_app.command("tunnel-upsert")
+def network_tunnel_upsert(
+    name: str,
+    target: str,
+    domains: list[str] = typer.Option(None, "--domain"),
+    rewrite_host: str = typer.Option(None, "--rewrite-host"),
+) -> None:
+    _output(
+        operations.networking.tunnel_upsert(
+            name, target, domains or None, rewrite_host=rewrite_host
+        )
+    )
+
+
+@network_app.command("tunnel-delete")
+def network_tunnel_delete(name: str) -> None:
+    _output(operations.networking.tunnel_delete(name))
+
+
+@network_app.command("tunnel-status")
+def network_tunnel_status() -> None:
+    _output(operations.networking.tunnel_status())
+
+
+@network_app.command("tunnel-verify")
+def network_tunnel_verify(public_url: str) -> None:
+    _output(operations.networking.tunnel_verify(public_url))
+
+
 @monitor_app.command("nodes")
 def monitor_nodes() -> None:
     _output(operations.monitoring.nodes())

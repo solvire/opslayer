@@ -100,6 +100,40 @@ def network_ingress(namespace: str = "default") -> dict:
 
 
 @mcp.tool()
+def tunnel_upsert_route(
+    name: str, target: str, domains: list[str] | None = None
+) -> dict:
+    """Point a public host at a home backend through the tunnel (frp). name is
+    the host e.g. scotttactical.com; target is the frpc backend (a k8s Service
+    FQDN like traefik.kube-system.svc.cluster.local, or host:port)."""
+    return operations.networking.tunnel_upsert(name, target, domains)
+
+
+@mcp.tool()
+def tunnel_list_routes() -> dict:
+    """List the current tunnel (frpc) proxy config."""
+    return operations.networking.tunnel_list()
+
+
+@mcp.tool()
+def tunnel_delete_route(name: str) -> dict:
+    """Remove a tunnel route (host)."""
+    return operations.networking.tunnel_delete(name)
+
+
+@mcp.tool()
+def tunnel_status() -> dict:
+    """Tunnel (frpc) deployment status."""
+    return operations.networking.tunnel_status()
+
+
+@mcp.tool()
+def tunnel_verify(public_url: str) -> dict:
+    """Fetch a public URL through the tunnel and report the HTTP code."""
+    return operations.networking.tunnel_verify(public_url)
+
+
+@mcp.tool()
 def opslayer_events(limit: int = 20) -> dict:
     """Recent opslayer actions (audit tail)."""
     return {"events": tail(limit)}
