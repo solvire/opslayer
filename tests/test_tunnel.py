@@ -114,3 +114,99 @@ def test_missing_server_raises():
             domains=None,
             cfg=Config(frp_server="", frp_token=""),
         )
+
+
+def test_multi_route_upsert_preserves_existing(monkeypatch):
+    """Adding a new route must NOT drop an existing route in the live config."""
+    existing = (
+        'serverAddr = "44.242.82.136"\n'
+        'serverPort = 7000\n'
+        'auth.method = "token"\n'
+        'auth.token = "{{ .Envs.FRP_TOKEN }}"\n\n'
+        "[[proxies]]\n"
+        'name = "theduber.club"\n'
+        'type = "http"\n'
+        'localIP = "traefik.kube-system.svc.cluster.local"\n'
+        "localPort = 80\n"
+        'customDomains = ["theduber.club", "www.theduber.club"]\n'
+        'hostHeaderRewrite = "theduber.dtac.io"\n'
+        "transport.useEncryption = true\n"
+    )
+    applied = {}
+
+    class StubKubectl:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, args, *, timeout=60, input=None):
+            self.calls.append((args, input))
+            if "get" in args and "cm" in args:
+                import json
+                return json.dumps({"data": {"frpc.toml": existing}})
+            if "apply" in args and input is not None:
+                applied["combined"] = input
+            if "get" in args and "deploy" in args:
+                return "frpc   1/1    Running"
+            return ""
+
+    import opslayer.runners as runners
+    monkeypatch.setattr(runners, "kubectl", StubKubectl())
+
+    result = FrpProvider(CFG).upsert_route(
+        "scotttactical.com",
+        "traefik.kube-system.svc.cluster.local",
+        domains=["scotttactical.com", "www.scotttactical.com"],
+        cfg=CFG,
+        rewrite_host="scotttactical.dtac.io",
+    )
+    assert result["result"] == "ok"
+    assert result["routes"] == ["scotttactical.com", "theduber.club"]
+    # the applied config must contain BOTH proxies
+    combined = applied["combined"]
+    assert "theduber.club" in combined
+    assert "scotttactical.com" in combined
+    # and both hostHeaderRewrite values survive
+    assert "theduber.dtac.io" in combined
+    assert "scotttactical.dtac.io" in combined
+
+
+def test_multi_route_replaces_same_name(monkeypatch):
+    """Re-upserting the SAME route replaces it, not duplicates it."""
+    existing = (
+        'serverAddr = "44.242.82.136"\n'
+        'serverPort = 7000\n'
+        'auth.method = "token"\n'
+        'auth.token = "{{ .Envs.FRP_TOKEN }}"\n\n'
+        "[[proxies]]\n"
+        'name = "scotttactical.com"\n'
+        'type = "http"\n'
+        'localIP = "traefik.kube-system.svc.cluster.local"\n'
+        "localPort = 80\n"
+        'customDomains = ["scotttactical.com"]\n'
+        "transport.useEncryption = true\n"
+    )
+    applied = {}
+
+    class StubKubectl:
+        def __call__(self, args, *, timeout=60, input=None):
+            if "get" in args and "cm" in args:
+                import json
+                return json.dumps({"data": {"frpc.toml": existing}})
+            if "apply" in args and input is not None:
+                applied["combined"] = input
+            if "get" in args and "deploy" in args:
+                return "frpc   1/1    Running"
+            return ""
+
+    import opslayer.runners as runners
+    monkeypatch.setattr(runners, "kubectl", StubKubectl())
+
+    result = FrpProvider(CFG).upsert_route(
+        "scotttactical.com",
+        "traefik.kube-system.svc.cluster.local",
+        domains=["scotttactical.com"],
+        cfg=CFG,
+    )
+    assert result["result"] == "ok"
+    assert result["routes"] == ["scotttactical.com"]
+    assert applied["combined"].count("[[proxies]]") == 1

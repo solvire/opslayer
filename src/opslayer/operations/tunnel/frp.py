@@ -67,17 +67,18 @@ def _split_target(target: str) -> tuple[str, int]:
     return backend, 80
 
 
-def _toml(cfg: Config, hosts: list[str], target: str, rewrite_host: str | None = None) -> str:
+def _proxy_block(hosts: list[str], target: str, rewrite_host: str | None = None) -> str:
+    """Render ONE frpc.toml `[[proxies]]` block for an http route.
+
+    The token is NOT rendered here; frp reads it from the environment in the
+    container (secretKeyRef -> FRP_TOKEN), keeping it out of the versioned CM.
+    """
     domains = ", ".join(f'"{h}"' for h in hosts)
     local_ip, local_port = _split_target(target)
     rewrite = ""
     if rewrite_host:
         rewrite = f'hostHeaderRewrite = "{rewrite_host}"\n'
     return (
-        f"serverAddr = \"{cfg.frp_server}\"\n"
-        f"serverPort = {cfg.frp_port}\n"
-        "auth.method = \"token\"\n"
-        "auth.token = \"{{ .Envs.FRP_TOKEN }}\"\n\n"
         "[[proxies]]\n"
         f"name = \"{hosts[0]}\"\n"
         "type = \"http\"\n"
@@ -87,6 +88,29 @@ def _toml(cfg: Config, hosts: list[str], target: str, rewrite_host: str | None =
         + rewrite
         + "transport.useEncryption = true\n"
     )
+
+
+def _toml(cfg: Config, hosts: list[str], target: str, rewrite_host: str | None = None) -> str:
+    """Back-compat: single-route config (header + one proxy)."""
+    return _render_config(cfg, [_proxy_block(hosts, target, rewrite_host)])
+
+
+def _render_config(cfg: Config, proxy_blocks: list[str]) -> str:
+    """Full frpc.toml: shared header + one [[proxies]] block per route."""
+    return (
+        f"serverAddr = \"{cfg.frp_server}\"\n"
+        f"serverPort = {cfg.frp_port}\n"
+        "auth.method = \"token\"\n"
+        "auth.token = \"{{ .Envs.FRP_TOKEN }}\"\n\n"
+        + "\n".join(proxy_blocks)
+        + "\n"
+    )
+
+
+def _parse_proxy_names(toml: str) -> set[str]:
+    """Return the set of route names (proxy `name =` values) in a config string."""
+    import re
+    return set(re.findall(r"^name = \"([^\"]+)\"", toml, re.MULTILINE))
 
 
 def _configmap_manifest(toml: str) -> dict:
@@ -176,19 +200,44 @@ class FrpProvider:
 
     def list_routes(self, *, cfg: Config | None = None) -> dict:
         cfg = cfg or self.cfg
-        toml = ""
+        toml = self._read_config_toml(cfg)
+        return {
+            "provider": "frp",
+            "namespace": _NAMESPACE,
+            "routes": sorted(_parse_proxy_names(toml)),
+            "config": toml,
+        }
+
+    def _read_config_toml(self, cfg: Config) -> str:
+        """Current frpc.toml from the live ConfigMap ('' if none)."""
         try:
             out = runners.kubectl(["get", "cm", _CONFIG_CM, "-n", _NAMESPACE, "-o", "json"])
-            toml = json.loads(out).get("data", {}).get("frpc.toml", "")
+            return json.loads(out).get("data", {}).get("frpc.toml", "")
         except Exception:  # noqa: BLE001 - not deployed yet
-            toml = ""
-        return {"provider": "frp", "namespace": _NAMESPACE, "config": toml}
+            return ""
 
     def upsert_route(self, name: str, target: str, domains: list[str] | None, *, cfg: Config | None = None, rewrite_host: str | None = None) -> dict:
         cfg = cfg or self.cfg
         self._ensure_server(cfg)
         hosts = domains or [name]
-        toml = _toml(cfg, hosts, target, rewrite_host)
+
+        # Multi-route: read the live config, drop any existing block for THIS
+        # route name, then append the new block. Other routes are preserved.
+        current = self._read_config_toml(cfg)
+        new_block = _proxy_block(hosts, target, rewrite_host)
+        kept = ""
+        if current:
+            # split existing proxies by [[proxies]] headers, keep non-matching names
+            import re
+            blocks = re.split(r"(?=^\[\[proxies\]\]$)", current, flags=re.MULTILINE)
+            for blk in blocks:
+                if blk.startswith("[[proxies]]"):
+                    m = re.search(r'^name = "([^"]+)"', blk, re.MULTILINE)
+                    if m and m.group(1) == hosts[0]:
+                        continue  # replace this route
+                    kept += blk
+        toml = _render_config(cfg, [b for b in (kept, new_block) if b.strip()])
+
         manifests = [
             _configmap_manifest(toml),
             _secret_manifest(cfg.frp_token),
@@ -206,6 +255,7 @@ class FrpProvider:
             "backend": target,
             "domains": hosts,
             "rewrite_host": rewrite_host,
+            "routes": sorted(_parse_proxy_names(toml)),
             "deployed": [_TOKEN_SECRET, _CONFIG_CM, _APP_NAME],
             "event": entry,
         }
