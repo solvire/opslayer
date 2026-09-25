@@ -1,0 +1,6 @@
+# nut_exporter environment - rendered by opslayer monitor deploy.
+# Read path is passwordless by design; add user/pass only if the NUT server
+# ever requires auth (NUT_EXPORTER_USERNAME / NUT_EXPORTER_PASSWORD).
+NUT_EXPORTER_SERVER=${OPSLAYER_NUT_SERVER}
+NUT_EXPORTER_SERVERPORT=3493
+NUT_EXPORTER_VARIABLES=battery.charge,battery.voltage,ups.load,ups.status

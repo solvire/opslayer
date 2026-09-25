@@ -1,0 +1,18 @@
+[Unit]
+Description=Beszel agent (monitors this host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=beszel
+Group=beszel
+WorkingDirectory=/opt/beszel/agent
+EnvironmentFile=/opt/beszel/agent/agent.env
+ExecStart=/usr/local/bin/beszel-agent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

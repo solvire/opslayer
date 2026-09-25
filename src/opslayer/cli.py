@@ -10,7 +10,7 @@ from . import operations
 from .config import Config, get_config
 from .events import tail
 
-app = typer.Typer(no_args_is_help=True, help="Control layer for the dtac.io homelab.")
+app = typer.Typer(no_args_is_help=True, help="Control layer for the self-hosted homelab.")
 deploy_app = typer.Typer(help="App deploys (ArgoCD).")
 network_app = typer.Typer(help="DNS and ingress.")
 monitor_app = typer.Typer(help="Cluster and service status.")
@@ -146,6 +146,69 @@ def monitor_pods(namespace: str | None = None) -> None:
 @monitor_app.command("summary")
 def monitor_summary() -> None:
     _output(operations.monitoring.summary())
+
+
+@monitor_app.command("bootstrap")
+def monitor_bootstrap(
+    component: str = typer.Argument("all", help="'gatus', 'nut_exporter', 'beszel', or 'all'"),
+    force: bool = typer.Option(False, "--force", help="Reinstall even if already present."),
+    skip_probe: bool = typer.Option(False, "--skip-probe", help="Skip the target-box probe."),
+) -> None:
+    _output(operations.monitoring.bootstrap(component, force=force, skip_probe=skip_probe))
+
+
+@monitor_app.command("probe")
+def monitor_probe() -> None:
+    _output(operations.monitoring.probe())
+
+
+@monitor_app.command("deploy")
+def monitor_deploy(stack: str = typer.Argument("all", help="'gatus', 'beszel', or 'all'")) -> None:
+    _output(operations.monitoring.deploy(stack))
+
+
+@monitor_app.command("status")
+def monitor_status() -> None:
+    _output(operations.monitoring.stack_status())
+
+
+@monitor_app.command("beszel-sync")
+def monitor_beszel_sync() -> None:
+    """Wire the Beszel agent from .env: create hub user if absent, mint a
+    permanent universal token, read the hub key, write agent.env, restart agent."""
+    _output(operations.monitoring.beszel_sync())
+
+
+@monitor_app.command("beszel-init")
+def monitor_beszel_init(
+    email: str | None = typer.Option(None, "--email", help="Beszel hub admin email."),
+    password: str | None = typer.Option(None, "--password", help="Beszel hub admin password."),
+    no_input: bool = typer.Option(False, "--no-input", help="Never prompt; use --email/--password or .env."),
+) -> None:
+    """Interactive one-time setup: prompt for the hub admin credentials, persist
+    them to .env, then wire the agent (beszel-sync)."""
+    from . import config as cfgmod
+
+    cfg = Config.load()
+    if email is None and not no_input:
+        email = typer.prompt("Beszel hub admin email", default=cfg.beszel_admin_email or "admin@example.com")
+    if password is None and not no_input:
+        password = typer.prompt(
+            "Beszel hub admin password (enter blank to generate one)",
+            default="",
+            hide_input=True,
+            show_default=False,
+        )
+        if not password:
+            import secrets
+
+            password = secrets.token_urlsafe(24)
+            typer.echo("Generated a hub admin password and stored it in .env")
+    if email:
+        cfgmod.set_value("beszel_admin_email", email)
+    if password:
+        cfgmod.set_value("beszel_admin_password", password)
+    _output(operations.monitoring.beszel_sync(cfg=Config.load()))
 
 
 @nut_app.command("status")

@@ -58,6 +58,37 @@ def monitor_pods(namespace: str | None = None) -> dict:
 
 
 @mcp.tool()
+def monitor_deploy(stack: str = "all") -> dict:
+    """Deploy the monitoring stack (gatus / beszel / all) onto the ops controller."""
+    return operations.monitoring.deploy(stack)
+
+
+@mcp.tool()
+def monitor_probe() -> dict:
+    """Validate the target ops box (arch, OS, apt, sudo) before install/deploy."""
+    return operations.monitoring.probe()
+
+
+@mcp.tool()
+def monitor_bootstrap(component: str = "all", force: bool = False) -> dict:
+    """One-time install of monitoring binaries on the target box (gatus/beszel/nut_exporter)."""
+    return operations.monitoring.bootstrap(component, force=force)
+
+
+@mcp.tool()
+def monitor_stack_status() -> dict:
+    """Report systemctl active state for each deployed monitor service."""
+    return operations.monitoring.stack_status()
+
+
+@mcp.tool()
+def monitor_beszel_sync() -> dict:
+    """Wire the Beszel agent: create the hub user if absent, mint a permanent
+    universal token, read the hub public key, write agent.env, restart the agent."""
+    return operations.monitoring.beszel_sync()
+
+
+@mcp.tool()
 def cluster_cordon(node: str) -> dict:
     """Cordon a node (no new pods scheduled)."""
     return operations.cluster.cordon(node)
@@ -104,7 +135,7 @@ def tunnel_upsert_route(
     name: str, target: str, domains: list[str] | None = None
 ) -> dict:
     """Point a public host at a home backend through the tunnel (frp). name is
-    the host e.g. scotttactical.com; target is the frpc backend (a k8s Service
+    the host e.g. a public site; target is the frpc backend (a k8s Service
     FQDN like traefik.kube-system.svc.cluster.local, or host:port)."""
     return operations.networking.tunnel_upsert(name, target, domains)
 

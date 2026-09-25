@@ -8,5 +8,6 @@ dist/
 .env
 .env*
 .env.*
+!.env.example
 config.toml
 *.local.toml

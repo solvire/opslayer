@@ -1,0 +1,17 @@
+[Unit]
+Description=nut_exporter - NUT to Prometheus text
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nut
+Group=nut
+EnvironmentFile=/opt/gatus/nut_exporter.env
+ExecStart=/usr/local/bin/nut_exporter --web.listen-address=:${OPSLAYER_NUT_EXPORTER_PORT}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

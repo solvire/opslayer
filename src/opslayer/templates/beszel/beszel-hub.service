@@ -1,0 +1,20 @@
+[Unit]
+Description=Beszel hub (PocketBase dashboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=beszel
+Group=beszel
+WorkingDirectory=/opt/beszel/hub
+EnvironmentFile=/opt/beszel/hub/hub.env
+ExecStart=/usr/local/bin/beszel serve --http "0.0.0.0:8090"
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/beszel/hub
+
+[Install]
+WantedBy=multi-user.target
