@@ -18,6 +18,7 @@ local file.
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 from ... import runners
@@ -133,7 +134,10 @@ def _secret_manifest(token: str) -> dict:
     }
 
 
-def _deployment_manifest() -> dict:
+def _deployment_manifest(config_hash: str | None = None) -> dict:
+    annotations: dict[str, str] = {}
+    if config_hash:
+        annotations["opslayer.io/frpc-config-hash"] = config_hash
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -142,7 +146,10 @@ def _deployment_manifest() -> dict:
             "replicas": 1,
             "selector": {"matchLabels": {"app.kubernetes.io/name": _APP_NAME}},
             "template": {
-                "metadata": {"labels": {"app.kubernetes.io/name": _APP_NAME}},
+                "metadata": {
+                    "labels": {"app.kubernetes.io/name": _APP_NAME},
+                    "annotations": annotations,
+                },
                 "spec": {
                     "imagePullSecrets": [{"name": "ghcr-pull"}],
                     "containers": [
@@ -238,10 +245,14 @@ class FrpProvider:
                     kept += blk
         toml = _render_config(cfg, [b for b in (kept, new_block) if b.strip()])
 
+        # Stamp the pod template with the rendered-config hash so `kubectl apply`
+        # changes the Deployment spec (and Kubernetes rolls frpc) exactly when the
+        # config changed - no manual `kubectl rollout restart` needed for new routes.
+        config_hash = hashlib.sha256(toml.encode("utf-8")).hexdigest()[:16]
         manifests = [
             _configmap_manifest(toml),
             _secret_manifest(cfg.frp_token),
-            _deployment_manifest(),
+            _deployment_manifest(config_hash),
         ]
         combined = "\n---\n".join(json.dumps(m) for m in manifests)
         runners.kubectl(["apply", "-n", _NAMESPACE, "-f", "-"], input=combined, timeout=60)

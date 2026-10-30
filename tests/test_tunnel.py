@@ -210,3 +210,45 @@ def test_multi_route_replaces_same_name(monkeypatch):
     assert result["result"] == "ok"
     assert result["routes"] == ["scotttactical.com"]
     assert applied["combined"].count("[[proxies]]") == 1
+
+
+def _extract_deploy_hash(combined: str):
+    """Return the frpc Deployment pod-template config-hash annotation, if any."""
+    import json as _json
+    for chunk in combined.split("\n---\n"):
+        manifest = _json.loads(chunk)
+        if manifest.get("kind") == "Deployment":
+            meta = manifest["spec"]["template"]["metadata"]
+            return meta.get("annotations", {}).get("opslayer.io/frpc-config-hash")
+    return None
+
+
+def test_upsert_stamps_config_hash_and_rolls_only_on_change(monkeypatch):
+    """The frpc Deployment carries a config hash so k8s rolls only when config changes."""
+    applied = {}
+
+    class StubKubectl:
+        def __call__(self, args, *, timeout=60, input=None):
+            if "get" in args and "cm" in args:
+                return '{"data": {"frpc.toml": ""}}'
+            if "apply" in args and input is not None:
+                applied["combined"] = input
+            if "get" in args and "deploy" in args:
+                return "frpc   1/1    Running"
+            return ""
+
+    import opslayer.runners as runners
+    monkeypatch.setattr(runners, "kubectl", StubKubectl())
+
+    provider = FrpProvider(CFG)
+    provider.upsert_route("a.com", "traefik.kube-system.svc.cluster.local", ["a.com"], cfg=CFG)
+    hash_a = _extract_deploy_hash(applied["combined"])
+    assert hash_a  # annotation present on the pod template
+
+    # identical config -> identical hash -> no spurious rollout
+    provider.upsert_route("a.com", "traefik.kube-system.svc.cluster.local", ["a.com"], cfg=CFG)
+    assert _extract_deploy_hash(applied["combined"]) == hash_a
+
+    # changed config -> changed hash -> Kubernetes rolls frpc
+    provider.upsert_route("b.com", "traefik.kube-system.svc.cluster.local", ["b.com"], cfg=CFG)
+    assert _extract_deploy_hash(applied["combined"]) != hash_a
